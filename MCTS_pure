@@ -1,0 +1,246 @@
+import time
+import random
+import math
+from tqdm import tqdm
+from copy import deepcopy
+from gomoku_game import Gomoku
+import gomoku_functions as gf
+from glob import glob
+import pickle
+
+
+class Node:
+    def __init__(self, state, move, parent=None):
+        self.state = state
+        self.move = move
+        self.parent = parent
+        self.children = []
+        self.visits = 0
+        self.wins = 0
+
+    def update(self, result):
+        self.visits += 1
+        self.wins += result
+
+
+class MCTS:
+    def __init__(self, game, move=None):
+        self.max_moves = 60
+        self.simulation_per_node = 1
+        self.game = deepcopy(game)
+        self.root = Node(state=deepcopy(game.board), move=move, parent=None)
+        self.c = 2
+
+        self.tau = 1.65
+
+        self.use_checkwin = [True for _ in range(6)] + [False for _ in range(4)]
+        random.shuffle(self.use_checkwin)
+
+    def _uct_select(self, node):
+        best_score = -math.inf
+        best_child = None
+        for child in node.children:
+            if child.visits == 0:
+                return child
+            win_rate = child.wins / child.visits
+            uct_score = win_rate + self.c * math.sqrt(math.log(node.visits) / child.visits)
+            if uct_score > best_score:
+                best_score = uct_score
+                best_child = child
+        return best_child
+
+    def _expand(self, node):
+        for move in gf.get_edge_moves(node.state):
+            # print(move)
+            new_state = deepcopy(node.state)
+            new_state = gf.put(new_state, *move)
+            child = Node(state=new_state, move=move, parent=node)
+            node.children.append(child)
+        return random.choice(node.children)
+
+    def _simulate(self, node, is_use_checkwin=False):
+        simulation_game = deepcopy(node.state)
+        player_turn = gf.get_current_player(simulation_game) * -1
+        legal_moves = gf.get_edge_moves(simulation_game, width=1)
+        for move_num in range(self.max_moves):
+            if legal_moves:
+                move = None
+                if is_use_checkwin:
+                    move = gf.find_win(simulation_game)
+                if move is None:
+                    move = random.choice(legal_moves)
+
+                simulation_game = gf.put(simulation_game, *move)
+                legal_moves = gf.get_edge_moves(simulation_game, width=1)
+                won_player = gf.check_won(simulation_game)
+                if won_player is not None:
+                    if won_player == player_turn:  # win
+                        return 1
+                    elif won_player == 0:  # draw
+                        return 0.5
+                    else:
+                        return 0
+            else:
+                break
+
+        # no player has won, used for backprop
+        return 0
+
+    def _backpropagate(self, node, result):
+        while node is not None:
+            node.update(result)
+            node = node.parent
+
+    def run(self, time_limit=None, iteration_limit=None, worker=None):
+        winning_move = self.game.find_win()
+        if winning_move is not None:
+            print("Found winning move")
+            return winning_move, [[winning_move, 1.0, 1, 1, 1]]
+
+        if len(self.game.moves) == 0:
+            return (7, 7), [[(7, 7), .998, 1, 1, 1]]
+
+        start_time = time.time()
+        if iteration_limit and worker is None:
+            bar = tqdm(total=iteration_limit, desc=f"Iterations{worker}")
+        elif time_limit and worker is None:
+            bar = tqdm(total=time_limit, desc=f"Iterations{worker}")
+
+        iterations = 0
+        while (not time_limit or time.time() - start_time < time_limit) and (
+                not iteration_limit or iterations < iteration_limit):
+            looping_time = time.time()
+            node = self.root
+            while node.children:
+                node = self._uct_select(node)
+            if gf.get_edge_moves(node.state, width=1):
+                node = self._expand(node)
+            for _ in range(self.simulation_per_node):
+                result = self._simulate(node, is_use_checkwin=random.choice(self.use_checkwin))
+                self._backpropagate(node, result)
+
+            if iteration_limit and worker is None:
+                bar.update(1)
+            elif time_limit and worker is None:
+                bar.update(time.time() - looping_time)
+
+            iterations += 1
+
+        move_probs = []
+        # print(child.state for child in self.root.children)
+        for i, node in enumerate(self.root.children):
+            if node.visits == 0:
+                continue
+            winrate = node.wins / node.visits
+            probability = ((node.visits / self.root.visits) + winrate * 0.2) ** (1 / self.tau)
+            move_probs.append([node.move, probability, node.visits, node.wins, self.root.visits])
+        move_probs = sorted(move_probs, key=lambda x: x[1], reverse=True)[:10]
+
+        norm = sum([prob for _, prob, _, _, _ in move_probs])
+        move_probs = [[move, prob/norm, visits, wins, total] for move, prob, visits, wins, total in move_probs]
+
+        print(move_probs)
+        return move_probs[0][0], move_probs
+
+    def update_tree(self, game, move):
+        self.game = deepcopy(game)
+        if len(self.root.children) == 0 or len(self.root.children) == 1:
+            self.root = Node(deepcopy(game.board), move=move, parent=None)
+            return
+
+        for node in self.root.children:
+            if node.move == move:
+                print(f"Pruned {len(self.root.children) - 1} nodes")
+                self.root = node
+                self.root.children = node.children
+                self.root.parent = None
+                break
+
+
+def prob_to_board(prob_dis):
+    prob_board = [0 for _ in range(225)]
+    for [x, y], prob, _, _, _ in prob_dis:
+        prob_board[y * 15 + x] = prob
+    return prob_board
+
+
+def print_board(board):
+    string = ''
+    for y in range(15):
+        for x in range(15):
+            string += '%d ' % board[y][x]
+        string += '\n'
+    print(string)
+
+def generate_samples(worker):
+    game_num = len(glob(f"mcts_samples/1/{worker}_*.pickle"))
+    for i in range(game_num, game_num + 100):
+        game = Gomoku()
+        mcts = MCTS(game)
+
+        input_board_history = []
+        board_prob_history = []
+        won_player = game.check_won()
+        turn = 0
+        while won_player is None:
+            if turn % 2 == 0 and 25 >= turn >= 15:
+                mcts.tau -= 0.03
+
+            input_board_history.append(game.get_game_state())
+            print_board(game.board)
+
+            move, prob_dis = mcts.run(time_limit=None, iteration_limit=1600, worker=worker)
+            game.put(*move)
+
+            board_prob_history.append(prob_to_board(prob_dis))
+            mcts.update_tree(game, move)
+            won_player = game.check_won()
+            if won_player is not None:
+                break
+            turn += 1
+        outputs = []
+        for player, prob_dis in enumerate(board_prob_history):
+            #player starts at base then 0 1 3 4 5 6 7 8 9 10 11 12 13 14 15
+            #base is player -0 and 0 is player 0
+            if player % 2 == 0: #if first player
+                if won_player == -1:  # if white won
+                    outputs.append([prob_dis + [1]])
+                else:  # if black won
+                    outputs.append([prob_dis + [-1]])
+
+            else: #first players is white
+                if won_player == 1:
+                    outputs.append([prob_dis + [1]])
+                else:
+                    outputs.append([prob_dis + [-1]])
+        with open(f"alphazero/mcts_samples/1/{worker}_{i}.pickle", "wb") as f:
+            pickle.dump([input_board_history, outputs], f)
+        # np.savez_compressed(f"mcts_samples/{worker}_{i}", inputs=np.array(input_board_history, dtype=np.int8), outputs=np.array(outputs, dtype=np.float32))
+
+
+if __name__ == "__main__":
+    from multiprocessing import Pool
+    import numpy as np
+
+    game = Gomoku()
+    game.put(7, 7)
+    game.put(6, 7)
+    game.put(7, 6)
+    game.put(6, 6)
+    game.put(7, 5)
+    # game.put(6, 5)
+    # game.put(7, 4)
+    # game.put(0, 0)
+
+    eval = MCTS(game)
+    print(np.array(game.board))
+    move, prob = eval.run(time_limit=None, iteration_limit=5000)
+    print(move, prob)
+    eval.update_tree(game, move)
+
+    # use multiprocessing to generate samples using generate_samples(worker) function
+    # starting_time = time.time()
+    # num_workers = 6
+    # with Pool() as p:
+    #     p.map(generate_samples, range(num_workers))
+    # print(f"finished 300 iterations in {time.time() - starting_time} seconds")
