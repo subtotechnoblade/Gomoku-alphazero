@@ -1,0 +1,167 @@
+import random
+from copy import deepcopy
+import numpy as np
+
+def get_legal_moves(input_board):
+    board = deepcopy(input_board)
+    open_moves = []
+    for y in range(15):
+        for x in range(15):
+            if board[y][x] == 0:
+                open_moves.append([x, y])
+    return open_moves
+
+
+def get_current_player(input_board):
+    if (225 - len(get_legal_moves(input_board))) % 2 == 0:
+        return -1
+    return 1
+
+
+def get_edge_moves(input_board, width=2):
+    board = deepcopy(input_board)
+    # print(np.array(board))
+    edge_moves = set()
+    # if all(row == [base for _ in range(len(row))] for row in board):
+    #     print(True)
+    #     return [random.choice(get_legal_moves(input_board))]
+    for y in range(15):
+        for x in range(15):
+            if board[y][x] != 0:
+                # print(True)
+                edge_moves.add((x - 1, y - 1))
+                edge_moves.add((x - 1, y))
+                edge_moves.add((x - 1, y + 1))
+                edge_moves.add((x, y - 1))
+                edge_moves.add((x, y + 1))
+                edge_moves.add((x + 1, y - 1))
+                edge_moves.add((x + 1, y))
+                edge_moves.add((x + 1, y + 1))
+                if width == 1:
+                    continue
+                edge_moves.add((x - 2, y - 2))
+                edge_moves.add((x - 2, y - 1))
+                edge_moves.add((x - 2, y))
+                edge_moves.add((x - 2, y + 1))
+                edge_moves.add((x - 2, y + 2))
+
+                edge_moves.add((x - 1, y - 2))
+                edge_moves.add((x - 1, y + 2))
+
+                edge_moves.add((x, y - 2))
+                edge_moves.add((x, y + 2))
+
+                edge_moves.add((x + 1, y - 2))
+                edge_moves.add((x + 1, y + 2))
+
+                edge_moves.add((x + 2, y - 2))
+                edge_moves.add((x + 2, y - 2))
+                edge_moves.add((x + 2, y))
+                edge_moves.add((x + 2, y + 1))
+                edge_moves.add((x + 2, y + 2))
+    for x, y in edge_moves.copy():
+        if x < 0 or x > 14 or y < 0 or y > 14:
+            edge_moves.remove((x, y))
+            continue
+        if board[y][x] != 0:
+            edge_moves.remove((x, y))
+    # print(list(edge_moves))
+    return list(edge_moves)
+
+
+def put(input_board, x, y):
+    board = deepcopy(input_board)
+    if board[y][x] != 0:
+        raise ValueError("Invalid move")
+    board[y][x] = get_current_player(input_board)
+    return board
+
+def check_won(input_board):
+    board = input_board.copy()
+    won_player = 0
+    # returns winning player -0 or 0
+    # returns base for draw
+    # returns None for no win found
+    player = get_current_player(input_board.copy()) * -1
+    # player must be inverted back to original player to check who won
+
+    for y in range(15):
+        for x in range(15):
+            try:
+                if board[y][x] == player and board[y + 1][x] == player and \
+                        board[y + 2][x] == player and board[y + 3][x] == player and \
+                        board[y + 4][x] == player:
+                    won_player = player
+                    break
+            except:
+                pass
+
+            try:
+                if board[y][x] == player and board[y][x + 1] == player and \
+                        board[y][x + 2] == player and board[y][x + 3] == player and \
+                        board[y][x + 4] == player:
+                    won_player = player
+                    break
+            except:
+                pass
+
+            try:
+                if board[y][x] == player and board[y + 1][x + 1] == player and \
+                        board[y + 2][x + 2] == player and board[y + 3][x + 3] == player and \
+                        board[y + 4][x + 4] == player:
+                    won_player = player
+                    break
+            except:
+                pass
+
+            try:
+                if x >= 4 and board[y][x] == player and board[y + 1][x - 1] == player and \
+                        board[y + 2][x - 2] == player and board[y + 3][x - 3] == player and \
+                        board[y + 4][x - 4] == player:
+                    won_player = player
+                    break
+            except:
+                pass
+
+        if won_player > 0:
+            break
+
+    turns = 0
+    if won_player == 0:
+        for y_row in board:
+            for x in y_row:
+                if x != 0:
+                    turns += 1
+        if turns >= 225:
+            return 0  # meaning draw
+        else:
+            return None  # meaning nobody has won
+    return won_player  # if it isn't a draw and someone has won return the player who won
+
+
+def find_win(input_board):
+    board = deepcopy(input_board)
+    for x, y in get_edge_moves(input_board, width=1):
+
+        board[y][x] = get_current_player(input_board)
+        if check_won(board) == get_current_player(input_board):
+            board[y][x] = 0
+            return x, y
+        board[y][x] = 0
+    return None
+
+if __name__ == "__main__":
+    from gomoku_game import Gomoku
+    game = Gomoku()
+    game.put(7, 7)
+    game.put(6, 7)
+    game.put(7, 6)
+    game.put(6, 6)
+    game.put(7, 5)
+    game.put(6, 5)
+    game.put(7, 4)
+    game.put(1, 1)
+    print(game)
+    # print(game.find_win())
+    print(find_win(game.board))
+
