@@ -1,0 +1,239 @@
+import math
+import random
+import numpy as np
+from gomoku_game import Gomoku
+# // check for any bugs
+from copy import deepcopy
+import time
+import random
+import math
+
+from tqdm import tqdm
+
+
+class Node:
+    def __init__(self, state, move, prob=None, parent=None):
+        self.state = state
+        self.move = move
+        self.parent = parent
+        self.children = []
+
+        self.visits = 0  # N
+        self.wins = 0  # used for UCT
+
+        self.value = 0
+        # Q = sum of the values from the value head / N
+        # self.Q = self.value / self.visits
+        self.prob = prob  # P
+
+    def update(self, result):
+        self.visits += 1
+        self.wins += result
+
+
+class MCTS:
+    def __init__(self, game, model,  move=None, max_moves=120, simulation_per_node=2, c_puct=2.5, tau=1.5):
+        self.game = deepcopy(game)
+        self.root = Node(state=game, move=move, parent=None)
+        self.max_moves = max_moves
+        self.simulation_per_node = simulation_per_node
+        self.c_puct = c_puct
+
+        self.tau = tau  # temperature control for exploration, stochastic exploration
+        self.suggestion_weight = 0.15
+
+        self.use_checkwin = [True for _ in range(6)] + [False for _ in range(4)]
+        self.alphazero = model
+        random.shuffle(self.use_checkwin)
+
+    def alphazero_predict(self, game_state, input_game_state, cutoff=7):
+        policy = []
+        output = self.alphazero.predict(input_game_state, verbose=0)[0]
+        policy_output = output[:225].reshape((15, 15))
+
+        # given an array of shape 15, 15 rank the moves x,y by their numbers, including the values [x, y, value]
+        move_indexes = np.argsort(policy_output, axis=None)[::-1]
+        sorted_moves = [(move_indexes % 15, move_indexes // 15) for move_indexes in move_indexes]
+        for x, y in sorted_moves:
+            if game_state[y][x] == 0:
+                policy.append([(x, y), policy_output[y][x]])
+
+        policy = policy[:cutoff]
+        # normalize the policy distribution
+        sum_values = sum(val[1] for val in policy)
+        policy = [[move, value / sum_values] for move, value in policy]
+
+        value = output[225]
+        return policy, value
+
+    def update_hyperparameters(self, c_puct=3 ** 0.5, tau=0, suggestion_weight=0, simluation_per_node=0, max_moves=0):
+        self.c_puct = c_puct
+        self.tau += tau
+        self.suggestion_weight += suggestion_weight
+        self.simluation_per_node += simluation_per_node
+        self.max_moves += max_moves
+
+    def _puct_select(self, node):
+        best_score = -math.inf
+        best_child = None
+        for child in node.children:
+            if child.visits == 0:
+                _, value = self.alphazero_predict(child.state.board.copy(), child.state.get_game_state())
+                # value determines at the current state regardless in terms of that player -0 = loss, 0 = win base = draw
+                # thus no need to invert the value if the player is -0
+                child.value += value
+
+                backprop_child = child
+                # backprop the value
+                while backprop_child.parent is not None:
+                    backprop_child.parent.value += value
+                    backprop_child = backprop_child.parent
+
+                return child
+            Q = child.value / child.visits
+            puct_score = Q + child.prob * self.c_puct * (node.visits / child.visits + 1)**0.5
+            if puct_score > best_score:
+                best_score = puct_score
+                best_child = child
+
+        return best_child
+
+    def _expand(self, node):
+        edge_moves = node.state.get_edge_moves()
+        policy, value = self.alphazero_predict(node.state.board.copy(), node.state.get_game_state())
+        policy_moves = [move for move, _ in policy]
+        if len(edge_moves) >= 5:
+            edge_moves = random.sample(edge_moves, 8)
+
+        for move in edge_moves:
+            if move not in policy_moves:
+                policy.append([move, self.suggestion_weight])
+            if len(policy) >= 15:
+                break
+
+        policy = sorted(policy, key=lambda x: x[1], reverse=True)[:10] # get the top 10 moves
+
+        for move, prob in policy:  # get the NN prob distribution for given state
+            # get the prob from the prob disb and pass onto the node
+            new_state = deepcopy(node.state)
+            new_state.put(*move)
+            # get the value for that board state
+            child = Node(state=new_state, move=move, prob=prob, parent=node)
+            node.children.append(child)
+        return random.choice(node.children)
+
+    def _simulate(self, node, is_use_checkwin=False):
+        simulation_game = Gomoku(deepcopy(node.state.board))
+        player_turn = simulation_game.get_current_player() * -1
+        legal_moves = simulation_game.get_edge_moves(width=1)
+        for _ in range(self.max_moves):
+            if legal_moves:
+                move = None
+                if is_use_checkwin:
+                    move = simulation_game.find_win()
+                if move is None:
+                    move = random.choice(legal_moves)
+
+                simulation_game.put(*move)
+                legal_moves = simulation_game.get_edge_moves(width=1)
+                won_player = simulation_game.check_won()
+                if won_player is not None:
+                    if won_player == player_turn:  # win
+                        return 1
+                    elif won_player == 0:  # draw
+                        return 0.5
+                    else:
+                        return 0
+            else:
+                break
+
+        # no player has won, used for backprop
+        return 0
+
+    def _backpropagate(self, node, result):
+        while node is not None:
+            node.update(result)
+            node = node.parent
+
+    def run(self, time_limit=None, iteration_limit=None):
+        winning_move = self.game.find_win()
+        if winning_move is not None:
+            return winning_move, [[winning_move, 1.0, 1, 1, 1]]
+
+        start_time = time.time()
+        iterations = 0
+        if iteration_limit:
+            bar = tqdm(total=iteration_limit)
+        else:
+            bar = tqdm(total=time_limit)
+        while (not time_limit or time.time() - start_time < time_limit) and \
+                (not iteration_limit or iterations < iteration_limit):
+            loop_start_time = time.time()
+
+            node = self.root
+            while node.children:
+                node = self._puct_select(node)
+            if node.state.get_legal_moves():
+                node = self._expand(node)
+            for _ in range(self.simulation_per_node):
+                result = self._simulate(node, is_use_checkwin=random.choice(self.use_checkwin))
+                self._backpropagate(node, result)
+            if iteration_limit:
+                bar.update(1)
+            else:
+                bar.update(time.time() - loop_start_time)
+            iterations += 1
+
+        move_probs = []
+        for i, node in enumerate(self.root.children):
+            if node.visits == 0:
+                continue
+            probability = (node.visits / self.root.visits) ** (1 / self.tau)
+            move_probs.append([node.move, probability, node.visits, node.wins, self.root.visits])
+
+        move_probs = sorted(move_probs, key=lambda x: x[1], reverse=True)[:]
+
+        total_prob = sum(prob for _, prob, _, _, _ in move_probs)
+        for i, [move, prob, visits, wins, root_visits] in enumerate(move_probs):
+            move_probs[i] = [move, (prob / total_prob), visits, wins, root_visits]
+        prob_weights = tuple(prob for _, prob, _, _, _ in move_probs)
+        print(prob_weights)
+
+        move = random.choices(move_probs, weights=prob_weights, k=1)
+
+        print(move)
+        print(move_probs)
+
+        return move[0], move_probs
+
+    def update_tree(self, game, move):
+        del self.game
+        self.game = deepcopy(game)
+        if len(self.root.children) == 0 or len(self.root.children) == 1:
+            self.root = Node(deepcopy(game.board), move=move, parent=None)
+            return
+
+        for node in self.root.children:
+            if node.move == move:
+                print(f"Pruned {len(self.root.children) - 1} nodes")
+                del self.root
+                self.root = node
+                self.root.children = node.children
+                self.root.parent = None
+            del node
+
+
+if __name__ == "__main__":
+    import tensorflow as tf
+    game = Gomoku()
+    model = tf.keras.models.load_model("alphazero/models/0")
+    eval = MCTS(game, model)
+    game.put(7, 7)
+    # game.put(6, 7)
+    # game.put(7, 6)
+    # game.put(6, 6)
+    # game.put(7, 5)
+    # game.put(6, 5)
+    print(np.array(game.board))
+    # eval.update_tree(game, [4, 6])
+    print(eval.run(time_limit=None, iteration_limit=100))
