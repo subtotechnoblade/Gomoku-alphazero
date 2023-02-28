@@ -1,0 +1,218 @@
+import random
+# import numpy as np
+from copy import deepcopy
+
+
+class Gomoku:
+    def __init__(self, board=None):
+        if board is None:
+            self.board = [[0 for _ in range(15)] for __ in range(15)]
+        else:
+            self.board = board.copy()
+        self.won_player = 0
+
+        self.board_history = []
+        self.black_board_history = []
+        self.white_board_history = []
+        self.moves = []
+
+        self.game_state_history = []
+
+
+    def get_legal_moves(self):
+        open_moves = []
+        for y in range(15):
+            for x in range(15):
+                if self.board[y][x] == 0:
+                    open_moves.append([x, y])
+        return open_moves
+
+    def get_edge_moves(self, width=2):
+        edge_moves = set()
+
+        if all(row == [0 for _ in range(len(row))] for row in self.board):
+            return [(7, 7)]
+            # print(False)
+            # return [random.choice(self.get_legal_moves())]
+        for y in range(15):
+            for x in range(15):
+                if self.board[y][x] != 0:
+                    edge_moves.add((x - 1, y - 1))
+                    edge_moves.add((x - 1, y))
+                    edge_moves.add((x - 1, y + 1))
+                    edge_moves.add((x, y - 1))
+                    edge_moves.add((x, y + 1))
+                    edge_moves.add((x + 1, y - 1))
+                    edge_moves.add((x + 1, y))
+                    edge_moves.add((x + 1, y + 1))
+                    if width == 1:
+                        continue
+                    edge_moves.add((x - 2, y - 2))
+                    edge_moves.add((x - 2, y - 1))
+                    edge_moves.add((x - 2, y))
+                    edge_moves.add((x - 2, y + 1))
+                    edge_moves.add((x - 2, y + 2))
+
+                    edge_moves.add((x - 1, y - 2))
+                    edge_moves.add((x - 1, y + 2))
+
+                    edge_moves.add((x, y - 2))
+                    edge_moves.add((x, y + 2))
+
+                    edge_moves.add((x + 1, y - 2))
+                    edge_moves.add((x + 1, y + 2))
+
+                    edge_moves.add((x + 2, y - 2))
+                    edge_moves.add((x + 2, y - 2))
+                    edge_moves.add((x + 2, y))
+                    edge_moves.add((x + 2, y + 1))
+                    edge_moves.add((x + 2, y + 2))
+        for x, y in edge_moves.copy():
+            if x < 0 or x > 14 or y < 0 or y > 14:
+                edge_moves.remove((x, y))
+                continue
+            if self.board[y][x] != 0:
+                edge_moves.remove((x, y))
+        return list(edge_moves)
+
+    def get_current_player(self):
+        if len(self.get_legal_moves()) % 2 == 0:
+            return 1
+        return -1
+
+    def put(self, x, y):
+
+        if self.board[y][x] != 0 or x is None or y is None:
+            raise ValueError(f"Invalid move: {x, y}")
+
+        player_turn = self.get_current_player()
+        self.board[y][x] = player_turn
+        # print(np.array(self.board).shape)
+        self.moves.append([x, y])
+        if player_turn == -1:
+            black_board = deepcopy(self.board)
+            # remove all the 0 in black_board and replace with base
+            for y in range(15):
+                for x in range(15):
+                    if black_board[y][x] == 1:
+                        black_board[y][x] = 0
+            self.black_board_history.append(black_board)
+        else:
+            white_board = deepcopy(self.board)
+            for y in range(15):
+                for x in range(15):
+                    if white_board[y][x] == -1:
+                        white_board[y][x] = 0
+            self.white_board_history.append(white_board)
+        self.game_state_history.append(self.get_game_state())
+
+    def get_game_state(self):
+        current_player = self.get_current_player()
+        current_player_board = [[[current_player for _ in range(15)] for __ in range(15)]]
+
+        if len(self.white_board_history) >= 8:
+            white_board = self.white_board_history[-8:]
+        elif not self.white_board_history:
+            white_board = [[[0 for _ in range(15)] for __ in range(15)] for __ in range(8)]
+        else:
+            white_board = [[[0 for _ in range(15)] for __ in range(15)] for __ in
+                           range(8 - len(self.white_board_history))] + self.white_board_history
+
+        if len(self.black_board_history) >= 8:
+            black_board = self.black_board_history[-8:]
+        elif not self.black_board_history:
+            black_board = [[[0 for _ in range(15)] for __ in range(15)] for __ in range(8)]
+        else:
+            # print(np.array(self.black_board_history).shape)
+            black_board = [[[0 for _ in range(15)] for __ in range(15)] for __ in
+                           range(8 - len(self.black_board_history))] + self.black_board_history
+
+        game_state = [current_player_board + white_board + black_board]
+        return game_state
+
+    def check_won(self):
+        # returns winning player -0 or 0
+        # returns base for draw
+        # returns None for no win found
+        player = self.get_current_player() * -1
+        # player must be inverted back to original player to check who won
+
+        for y in range(15):
+            for x in range(15):
+                try:
+                    if self.board[y][x] == player and self.board[y + 1][x] == player and \
+                            self.board[y + 2][x] == player and self.board[y + 3][x] == player and \
+                            self.board[y + 4][x] == player:
+                        self.won_player = player
+                        break
+                except:
+                    pass
+
+                try:
+                    if self.board[y][x] == player and self.board[y][x + 1] == player and \
+                            self.board[y][x + 2] == player and self.board[y][x + 3] == player and \
+                            self.board[y][x + 4] == player:
+                        self.won_player = player
+                        break
+                except:
+                    pass
+
+                try:
+                    if self.board[y][x] == player and self.board[y + 1][x + 1] == player and \
+                            self.board[y + 2][x + 2] == player and self.board[y + 3][x + 3] == player and \
+                            self.board[y + 4][x + 4] == player:
+                        self.won_player = player
+                        break
+                except:
+                    pass
+
+                try:
+                    if x >= 4 and self.board[y][x] == player and self.board[y + 1][x - 1] == player and \
+                            self.board[y + 2][x - 2] == player and self.board[y + 3][x - 3] == player and \
+                            self.board[y + 4][x - 4] == player:
+                        self.won_player = player
+                        break
+                except:
+                    pass
+
+            if self.won_player > 0:
+                break
+
+        turns = 0
+        if self.won_player == 0:
+            for y_row in self.board:
+                for x in y_row:
+                    if x != 0:
+                        turns += 1
+            if turns >= 225:
+                return 0  # meaning draw
+            else:
+                return None  # meaning nobody has won
+        return self.won_player  # if it isn't a draw and someone has won return the player who won
+
+    def find_win(self):
+        for x, y in self.get_edge_moves(width=1):
+            self.board[y][x] = self.get_current_player()
+            if self.check_won() == self.get_current_player() * -1:
+                self.board[y][x] = 0
+                print(f"found win for {self.get_current_player()} at {x, y}")
+                return x, y
+            self.board[y][x] = 0
+        return None
+
+
+if __name__ == "__main__":
+    import math
+    import random
+    import numpy as np
+
+    game = Gomoku()
+    # for i in range(15):
+    #     game.put(i, 7)
+    # game.put(6, 6)
+    game.put(7, 7)
+    game.put(9, 9)
+    print(np.array(game.board))
+    print(game.get_edge_moves(1))
+    # game.get_game_state()
+    # print(game.get_edge_moves())
